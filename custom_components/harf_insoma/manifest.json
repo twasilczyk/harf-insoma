@@ -1,0 +1,13 @@
+{
+  "domain": "harf_insoma",
+  "name": "Insoma RF",
+  "codeowners": ["@twasilczyk"],
+  "config_flow": true,
+  "dependencies": ["radio_frequency"],
+  "documentation": "https://github.com/twasilczyk/harf-insoma",
+  "integration_type": "device",
+  "iot_class": "assumed_state",
+  "issue_tracker": "https://github.com/twasilczyk/harf-insoma/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Insoma RF garden valve</title>
+  <desc>An original teal water drop with a white valve handle.</desc>
+  <path fill="#069ca4" d="M128 12c-16 23-34 44-51 67-22 29-39 57-39 81a90 90 0 0 0 180 0c0-24-17-52-39-81-17-23-35-44-51-67Z"/>
+  <path fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" d="M80 164h30m36 0h30M128 110v34m-28-34h56"/>
+  <circle cx="128" cy="164" r="22" fill="none" stroke="#fff" stroke-width="14"/>
+  <path fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" d="m118 174 20-20"/>
+</svg>

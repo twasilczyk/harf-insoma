@@ -1,0 +1,18 @@
+{
+  "entity": {
+    "select": {
+      "duration": {
+        "default": "mdi:timer-outline"
+      }
+    },
+    "switch": {
+      "valve": {
+        "default": "mdi:water-pump",
+        "state": {
+          "off": "mdi:water-pump-off",
+          "on": "mdi:water-pump"
+        }
+      }
+    }
+  }
+}

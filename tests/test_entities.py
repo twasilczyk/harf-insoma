@@ -94,11 +94,12 @@ async def advance(hass: HomeAssistant, freezer, when) -> None:
 async def test_initial_entities_and_persisted_setting(
     hass: HomeAssistant, transmitter: RecordingTransmitter, setup_valve
 ):
-    """Setup is silent, state is honestly unknown, and duration is local configuration."""
+    """Setup is silent, state defaults to off, and duration is local configuration."""
     valve = await setup_valve()
     state = hass.states.get(valve.switch_id)
-    assert state.state == STATE_UNKNOWN
-    assert state.attributes[ATTR_ASSUMED_STATE] is True
+    assert state.state == STATE_OFF
+    assert state.attributes.get(ATTR_ASSUMED_STATE, False) is False
+    assert state.attributes["state_source"] == "default"
     assert deadline(hass, valve) is None
     duration = hass.states.get(valve.duration_id)
     assert duration.state == "120"
@@ -228,7 +229,7 @@ async def test_repeated_on_reschedules_the_timer(
     ]
 
 
-async def test_failed_first_on_preserves_unknown_state(
+async def test_failed_first_on_preserves_off_state(
     hass: HomeAssistant, transmitter: RecordingTransmitter, setup_valve
 ):
     """A transport error is reported without claiming that watering started."""
@@ -236,7 +237,7 @@ async def test_failed_first_on_preserves_unknown_state(
     transmitter.failure = HomeAssistantError("Radio failed")
     with pytest.raises(HomeAssistantError, match="Radio failed"):
         await turn(hass, valve, "turn_on")
-    assert hass.states.get(valve.switch_id).state == STATE_UNKNOWN
+    assert hass.states.get(valve.switch_id).state == STATE_OFF
     assert deadline(hass, valve) is None
     assert transmitter.commands == []
 
@@ -276,7 +277,7 @@ async def test_local_setting_available_while_transmitter_is_unavailable(
     transmitter._attr_available = True
     transmitter.async_write_ha_state()
     await hass.async_block_till_done()
-    assert hass.states.get(valve.switch_id).state == STATE_UNKNOWN
+    assert hass.states.get(valve.switch_id).state == STATE_OFF
     await turn(hass, valve, "turn_on")
     assert command_word(transmitter.commands[0]) == 0xB754
 
@@ -300,7 +301,7 @@ async def test_transmitter_uuid_resolves_after_rename_before_setup(
     transmitter._attr_available = True
     transmitter.async_write_ha_state()
     await hass.async_block_till_done()
-    assert hass.states.get(valve.switch_id).state == STATE_UNKNOWN
+    assert hass.states.get(valve.switch_id).state == STATE_OFF
     await turn(hass, valve, "turn_on")
     assert command_word(transmitter.commands[0]) == 0xB75E
     assert entry.data[CONF_TRANSMITTER] == stored_uuid
@@ -366,12 +367,14 @@ async def test_valve_rename_preserves_deadline_and_future_control(
     ]
 
 
+@pytest.mark.parametrize("saved_state", [STATE_ON, STATE_UNAVAILABLE])
 async def test_restore_running_deadline_without_transmission(
     hass: HomeAssistant,
     transmitter: RecordingTransmitter,
     make_entry,
     setup_valve,
     freezer,
+    saved_state,
 ):
     """Restart resumes only HA's local estimate and never restarts the hardware timer."""
     entry = make_entry()
@@ -384,7 +387,7 @@ async def test_restore_running_deadline_without_transmission(
         [
             State(
                 registered.entity_id,
-                STATE_ON,
+                saved_state,
                 {"auto_off_at": restored_deadline.isoformat()},
             )
         ],
@@ -403,11 +406,12 @@ async def test_restore_running_deadline_without_transmission(
     [
         (STATE_OFF, None, STATE_OFF),
         (STATE_ON, "2000-01-01T00:00:00+00:00", STATE_OFF),
-        (STATE_ON, None, STATE_UNKNOWN),
-        (STATE_ON, "invalid", STATE_UNKNOWN),
-        (STATE_ON, "2026-99-01T00:00:00+00:00", STATE_UNKNOWN),
-        (STATE_ON, "2099-01-01T00:00:00", STATE_UNKNOWN),
-        (STATE_UNKNOWN, None, STATE_UNKNOWN),
+        (STATE_ON, None, STATE_OFF),
+        (STATE_ON, "invalid", STATE_OFF),
+        (STATE_ON, "2026-99-01T00:00:00+00:00", STATE_OFF),
+        (STATE_ON, "2099-01-01T00:00:00", STATE_OFF),
+        (STATE_ON, "2099-01-01T00:00:00+00:00", STATE_OFF),
+        (STATE_UNKNOWN, None, STATE_OFF),
     ],
 )
 async def test_restore_only_trusts_a_timed_on_state(
@@ -529,7 +533,7 @@ async def test_invalid_saved_duration_cannot_transmit(
     valve = await setup_valve(options={CONF_DURATION: invalid_duration})
     with pytest.raises(HomeAssistantError):
         await turn(hass, valve, "turn_on")
-    assert hass.states.get(valve.switch_id).state == STATE_UNKNOWN
+    assert hass.states.get(valve.switch_id).state == STATE_OFF
     assert deadline(hass, valve) is None
     assert transmitter.commands == []
     await turn(hass, valve, "turn_off")

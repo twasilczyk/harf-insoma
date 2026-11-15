@@ -9,6 +9,7 @@ from homeassistant.components.radio_frequency import (
     DATA_COMPONENT,
     RadioFrequencyTransmitterEntity,
 )
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -21,6 +22,16 @@ from custom_components.harf_insoma.const import (
     CONF_TRANSMITTER,
     DOMAIN,
 )
+
+
+@pytest.fixture
+async def receiver(hass):
+    """An independent receiver using the public HackRF dispatcher contract."""
+    entry = MockConfigEntry(domain="hackrf_proxy", title="Test receiver")
+    entry.add_to_hass(hass)
+    entry.mock_state(hass, ConfigEntryState.LOADED)
+    yield entry
+    entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
 
 
 @pytest.fixture(autouse=True)

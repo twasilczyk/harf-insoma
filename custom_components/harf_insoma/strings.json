@@ -2,25 +2,62 @@
   "config": {
     "step": {
       "user": {
-        "title": "Add an Insoma valve",
-        "description": "Select a 433.926 MHz RF transmitter and enter the OFF code of a remote already paired with your valve. ON will always use a timed watering command.",
+        "title": "Select an RF transmitter",
+        "description": "Select a transmitter supporting 433.926 MHz OOK. Home Assistant ON commands always include a watering time limit.",
         "data": {
-          "transmitter": "RF transmitter",
+          "transmitter": "RF transmitter"
+        }
+      },
+      "receiver": {
+        "title": "Select an optional RF receiver",
+        "description": "Select an ESPHome or HackRF proxy receiver configured for 433.926 MHz OOK to learn your remote and follow its buttons. Without a receiver, enter the remote OFF code manually.",
+        "data": {
+          "receiver": "RF receiver"
+        }
+      },
+      "manual": {
+        "title": "Enter the remote OFF code",
+        "description": "Enter the captured OFF code of a remote already paired with your valve.",
+        "data": {
           "off_code": "Remote OFF code"
         },
         "data_description": {
           "off_code": "Full 16-bit OFF code in decimal or hexadecimal with a 0x prefix (for example, 0xB750 or 0x24E0). The last hexadecimal digit must be 0."
         }
+      },
+      "learn": {
+        "title": "Learn the Insoma remote",
+        "description": "Press any button on the physical remote paired with this valve. Keep other remotes idle. Wait for several matching frames; listening stops after 30 seconds. Cancel to stop listening."
+      },
+      "retry": {
+        "title": "No remote learned",
+        "description": "No consistent Insoma signal arrived before the timeout, or the receiver is missing. Check its connection and 433.926 MHz OOK configuration, then select a receiver again or enter the OFF code manually.",
+        "data": {
+          "learn": "Try receiver learning again"
+        }
+      },
+      "reconfigure": {
+        "title": "Change the RF radios",
+        "description": "Change the transmitter or add or replace the optional receiver for physical remote updates. The valve code, entities, and watering duration stay the same. Select No receiver if the previous receiver is missing.",
+        "data": {
+          "transmitter": "RF transmitter",
+          "receiver": "RF receiver"
+        }
       }
     },
     "error": {
       "invalid_off_code": "Enter a 16-bit OFF code whose last hexadecimal digit is 0, such as 0xB750. Do not enter a timed or permanent-ON code.",
-      "invalid_transmitter": "Select a compatible 433.926 MHz OOK transmitter."
+      "invalid_transmitter": "Select a compatible 433.926 MHz OOK transmitter.",
+      "receiver_unusable": "This receiver is no longer available. Select another receiver or enter the OFF code manually."
     },
     "abort": {
       "already_configured": "This valve remote is already configured.",
       "no_transmitters": "Add an RF transmitter to Home Assistant before setting up Insoma RF.",
-      "no_compatible_transmitters": "No RF transmitter supports 433.926 MHz with OOK modulation."
+      "no_compatible_transmitters": "No RF transmitter supports 433.926 MHz with OOK modulation.",
+      "reconfigure_successful": "The RF radios have been updated."
+    },
+    "progress": {
+      "listening": "Listening for repeated Insoma remote frames…"
     }
   },
   "entity": {

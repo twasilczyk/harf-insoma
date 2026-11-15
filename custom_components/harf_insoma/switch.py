@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from homeassistant.components.radio_frequency import (
@@ -24,13 +25,15 @@ from homeassistant.util import dt as dt_util
 from .const import (
     ATTR_AUTO_OFF_AT,
     CONF_DURATION,
+    CONF_RECEIVER,
     CONF_TRANSMITTER,
     DEFAULT_DURATION,
     DOMAIN,
     DURATIONS,
 )
 from .entity import InsomaEntity
-from .protocol import encode_command
+from .protocol import COMMAND_DURATIONS, FrameStream, encode_command
+from .receiver import async_get_source
 
 
 async def async_setup_entry(
@@ -47,8 +50,8 @@ class InsomaSwitch(
 
     _attr_name = None
     _attr_translation_key = "valve"
-    _attr_assumed_state = True
-    _attr_is_on: bool | None = None
+    _attr_assumed_state = False
+    _attr_is_on = False
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize state without transmitting anything."""
@@ -58,12 +61,18 @@ class InsomaSwitch(
         self._cancel_timer: CALLBACK_TYPE | None = None
         self._command_lock = asyncio.Lock()
         self._removed = False
+        self._state_source = "default"
+        self._restored_once = False
+        self._decoder = FrameStream()
+        self._echo_until: dict[int, float] = {}
+        self._sending: int | None = None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Expose the expected shutoff time, not confirmation from the valve."""
         return {
-            ATTR_AUTO_OFF_AT: self._deadline.isoformat() if self._deadline else None
+            ATTR_AUTO_OFF_AT: self._deadline.isoformat() if self._deadline else None,
+            "state_source": self._state_source,
         }
 
     async def async_added_to_hass(self) -> None:
@@ -75,16 +84,23 @@ class InsomaSwitch(
         )
         await super().async_added_to_hass()
         self.async_on_remove(self._async_cleanup)
+        if source := async_get_source(
+            self.hass, self._entry.data.get(CONF_RECEIVER, "")
+        ):
+            self.async_on_remove(source.async_subscribe(self._async_receive))
         # Entity-ID renames remove and re-add the same object. Its live deadline
         # remains authoritative even when no saved state exists under the new ID.
-        if self._deadline is not None:
-            self._async_resume_timer(self._deadline)
+        if self._restored_once:
+            if self._deadline is not None:
+                self._async_resume_timer(self._deadline)
             return
+        self._restored_once = True
         last_state = await self.async_get_last_state()
         if last_state is None:
             return
         if last_state.state == STATE_OFF:
             self._attr_is_on = False
+            self._state_source = "restored"
             return
         if last_state.state not in (STATE_ON, STATE_UNAVAILABLE):
             return
@@ -99,6 +115,7 @@ class InsomaSwitch(
         if deadline is None or deadline.tzinfo is None:
             return
         self._async_resume_timer(deadline)
+        self._state_source = "restored"
 
     @callback
     def _async_track_availability(self, rf_entity_id: str) -> CALLBACK_TYPE:
@@ -149,7 +166,52 @@ class InsomaSwitch(
             self._async_schedule_timer()
         else:
             self._deadline = None
-            self._attr_is_on = None
+            self._attr_is_on = False
+
+    @callback
+    def _async_receive(self, timings: list[int]) -> None:
+        """Observe matching remote presses without transmitting or inferring feedback."""
+        if self._removed:
+            return
+        now = monotonic()
+        for frame in self._decoder.feed(timings, now=now):
+            if frame.off_code != self._off_code:
+                continue
+            if frame.command == self._sending or now <= self._echo_until.get(
+                frame.command, 0
+            ):
+                continue
+            self._async_cancel_timer()
+            self._deadline = None
+            self._attr_is_on = frame.command != 0
+            if duration := COMMAND_DURATIONS.get(frame.command):
+                self._deadline = dt_util.utcnow() + timedelta(minutes=duration)
+                self._async_schedule_timer()
+            self._state_source = "remote"
+            self.async_write_ha_state()
+
+    async def _async_transmit(self, duration: int | None) -> None:
+        """Guard echoes during sending and queued airtime, including failed sends."""
+        command = encode_command(self._off_code, duration)
+        nibble = next(
+            (key for key, value in COMMAND_DURATIONS.items() if value == duration), 0
+        )
+        airtime = (
+            sum(abs(t) for t in command.get_raw_timings())
+            * (command.repeat_count + 1)
+            / 1_000_000
+        )
+        self._sending = nibble
+        try:
+            await self._send_command(command)
+        except (Exception, asyncio.CancelledError):
+            if not self._removed:
+                self._state_source = "transmission_error"
+                self.async_write_ha_state()
+            raise
+        finally:
+            self._sending = None
+            self._echo_until[nibble] = monotonic() + airtime + 0.35
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Send a timed command even when ON is requested again."""
@@ -161,7 +223,7 @@ class InsomaSwitch(
                 raise ServiceValidationError(
                     translation_domain=DOMAIN, translation_key="invalid_duration"
                 )
-            await self._send_command(encode_command(self._off_code, duration))
+            await self._async_transmit(duration)
             if self._removed:
                 return
             # Do not replace a running deadline until transmission succeeds.
@@ -169,6 +231,7 @@ class InsomaSwitch(
             self._attr_is_on = True
             self._deadline = dt_util.utcnow() + timedelta(minutes=duration)
             self._async_schedule_timer()
+            self._state_source = "home_assistant"
             self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -176,12 +239,13 @@ class InsomaSwitch(
         async with self._command_lock:
             if self._removed:
                 raise HomeAssistantError("The valve entity has been unloaded")
-            await self._send_command(encode_command(self._off_code, None))
+            await self._async_transmit(None)
             if self._removed:
                 return
             self._async_cancel_timer()
             self._deadline = None
             self._attr_is_on = False
+            self._state_source = "home_assistant"
             self.async_write_ha_state()
 
     @callback
@@ -204,6 +268,7 @@ class InsomaSwitch(
         """Cancel callbacks and suppress updates from pending commands."""
         self._removed = True
         self._async_cancel_timer()
+        self._decoder.reset()
 
     @callback
     def _async_timer_elapsed(self, now: datetime) -> None:
@@ -211,4 +276,5 @@ class InsomaSwitch(
         self._cancel_timer = None
         self._deadline = None
         self._attr_is_on = False
+        self._state_source = "timer"
         self.async_write_ha_state()

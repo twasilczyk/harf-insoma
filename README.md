@@ -18,11 +18,12 @@ permanent-on command. Turning off sends an explicit off command.
 
 ## Requirements
 
-- Home Assistant **2026.9.2 or newer**.
+- Home Assistant **2026.11 or newer**.
 - An RF transmitter supporting **433.926 MHz OOK**, exposed as a configured
   `radio_frequency` entity.
-- An Insoma valve using the 16-bit protocol described below, and its remote's
-  captured **OFF code**.
+- An Insoma valve using the 16-bit protocol described below and its paired remote.
+- Optional: an ESPHome RF receiver or `hackrf_proxy` receiver configured for
+  **433.926 MHz OOK**. Without a receiver, obtain the remote's captured **OFF code**.
 
 The integration uses Home Assistant's `radio_frequency` integration. An ordinary
 ESPHome remote transmitter without a compatible `radio_frequency` entity is not
@@ -47,9 +48,21 @@ then add **Insoma RF** through **Settings → Devices & services**.
 
 ## Configure a valve
 
-During setup, select the transmitter and enter the full
-16-bit **OFF code** captured from that valve's paired remote. Use hexadecimal
-with a `0x` prefix or decimal, for example:
+Select the transmitter, then choose an optional receiver. With a receiver, press
+any button on the valve's paired physical remote while the learning dialog is
+listening. Learning requires three consecutive matching complete frames and
+ignores malformed signals. Setup finishes automatically when the remote is
+learned. Listening times out after 30 seconds and
+offers retry or manual entry. Canceling stops the receiver subscription.
+
+Keep other remotes idle during learning. This protocol has no checksum; another
+remote using the same waveform and command layout cannot be distinguished by
+timing alone. Learning derives the OFF code from the upper 12 bits, so OFF,
+timed ON, and permanent ON buttons can all be used.
+
+Without a receiver, select **No receiver** and enter the full 16-bit **OFF code**
+captured from that valve's paired remote. Use hexadecimal with a `0x` prefix or
+decimal, for example:
 
 | Remote | Hexadecimal OFF code | Decimal OFF code |
 | --- | --- | --- |
@@ -61,7 +74,16 @@ code ends in `0`. Setup rejects codes whose lowest four bits contain a command.
 The integration does not pair a new remote with the valve.
 
 Add the integration again for another valve. Valves can share the same
-transmitter.
+transmitter and receiver. Existing entries, entity IDs, codes, and duration
+settings are preserved. Use **Reconfigure** on an existing integration entry to
+change its transmitter or add, replace, or remove its optional receiver without
+learning a new code.
+
+Receiver tuning belongs to ESPHome or HackRF proxy; Insoma does not retune it.
+Receiver discovery is best effort, and an offline or missing receiver does not
+prevent manual setup or transmission. ESPHome subscriptions follow reconnects
+and reloads. Receiver disconnection discards partial frames without changing
+the estimated valve state or its timer.
 
 ## Watering duration
 
@@ -75,13 +97,30 @@ For example, choose **30 minutes** and turn on: Home Assistant sends the remote'
 
 ## State and shutoff
 
-The integration does not receive acknowledgements or state reports. The switch shows
-an **assumed state** based on commands sent by this integration. Home Assistant
-marks it off when the expected watering time expires; that local deadline does
-not control the valve's hardware timer. After a restart, a saved run with a valid
-future deadline resumes its remaining countdown without transmitting. An expired
-run is shown as off; without a trustworthy saved state, the switch starts as
-unknown. Home Assistant restarts never resend an on command.
+The switch uses normal ON/OFF controls and shows an **optimistic local estimate**.
+There are no RF acknowledgments or valve state reports. Successful HA commands
+update the estimate; failed transmissions preserve the previous state and
+deadline. Every explicit ON or OFF request transmits, even if the estimate
+already matches. Repeated ON restarts the hardware watering timer and local
+deadline; repeated OFF sends another explicit OFF command.
+
+Home Assistant marks the switch off when `auto_off_at` expires without sending
+anything. After a restart, a valid unexpired ON deadline resumes silently.
+Missing, invalid, expired, or untimed saved ON states default to OFF. Startup,
+reload, and restoration never send RF commands.
+
+With a receiver, repeated matching frames from the configured remote update the
+estimate: OFF cancels the timer, timed ON starts the corresponding timer, and
+physical permanent ON (`0xC`) shows ON with no deadline. Home Assistant never
+transmits permanent ON. That untimed ON estimate defaults to OFF after a restart.
+Repeated frames in a button burst are deduplicated; 300 ms of silence starts a
+new press. Matching echoes are suppressed during HA transmission and for the
+estimated burst airtime plus 350 ms afterward. An identical physical button
+pressed in that window cannot be distinguished from an echo and may be ignored.
+
+The `state_source` attribute records `default`, `home_assistant`, `remote`,
+`restored`, `transmission_error`, or `timer`. These describe the source of the
+estimate, never confirmation of actual valve operation.
 
 Using the physical remote, radio interference, or an out-of-range transmitter
 can make the displayed state differ from the valve. The integration cannot
@@ -102,7 +141,7 @@ lower four bits select a command.
 | 90 minutes | `0xA` | `0xB75A` |
 | 120 minutes | `0xE` | `0xB75E` |
 
-The permanent-on command (`0xC`) is intentionally not available.
+The permanent-on command (`0xC`) is receive-only and is never offered for transmission.
 
 Transmission is configured at **433,926,000 Hz**. USRP recordings of the OEM
 SGW12-RX remote (OEM 2) measured **433.92622 MHz**; the previous transmission
@@ -131,6 +170,7 @@ Use Python **3.14.2 or newer in the 3.14 series**:
 ```sh
 python3.14 -m venv .venv
 .venv/bin/python -m pip install -r requirements-test.txt
+.venv/bin/python -m pip install homeassistant==2026.11.0
 .venv/bin/python -m pytest -q
 ```
 

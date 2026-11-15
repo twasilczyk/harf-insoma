@@ -10,10 +10,14 @@ from homeassistant.components.radio_frequency import (
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_point_in_utc_time
+from homeassistant.helpers.event import (
+    async_track_entity_registry_updated_event,
+    async_track_point_in_utc_time,
+)
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
@@ -65,6 +69,10 @@ class InsomaSwitch(
     async def async_added_to_hass(self) -> None:
         """Restore only the expected state/deadline, never a radio command."""
         self._removed = False
+        # HA 2026.11 requires an entity ID; older releases use the UUID above.
+        self._rf_transmitter_entity_id = er.async_validate_entity_id(
+            er.async_get(self.hass), self._entry.data[CONF_TRANSMITTER]
+        )
         await super().async_added_to_hass()
         self.async_on_remove(self._async_cleanup)
         # Entity-ID renames remove and re-add the same object. Its live deadline
@@ -91,6 +99,42 @@ class InsomaSwitch(
         if deadline is None or deadline.tzinfo is None:
             return
         self._async_resume_timer(deadline)
+
+    @callback
+    def _async_track_availability(self, rf_entity_id: str) -> CALLBACK_TYPE:
+        """Keep HA 2026.11's availability subscription bound across renames.
+
+        HA 2026.9/2026.10 handle renames themselves and do not call this hook.
+        """
+        track_availability = super()._async_track_availability
+        unsubscribe_availability = track_availability(rf_entity_id)
+
+        @callback
+        def registry_updated(event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+            nonlocal unsubscribe_availability, unsubscribe_registry
+            data = event.data
+            if data["action"] != "update" or "entity_id" not in data["changes"]:
+                return
+            unsubscribe_availability()
+            unsubscribe_registry()
+            self._rf_transmitter_entity_id = data["entity_id"]
+            unsubscribe_availability = track_availability(
+                self._rf_transmitter_entity_id
+            )
+            unsubscribe_registry = async_track_entity_registry_updated_event(
+                self.hass, self._rf_transmitter_entity_id, registry_updated
+            )
+
+        unsubscribe_registry = async_track_entity_registry_updated_event(
+            self.hass, rf_entity_id, registry_updated
+        )
+
+        @callback
+        def unsubscribe() -> None:
+            unsubscribe_availability()
+            unsubscribe_registry()
+
+        return unsubscribe
 
     @callback
     def _async_resume_timer(self, deadline: datetime) -> None:

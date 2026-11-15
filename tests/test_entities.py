@@ -14,6 +14,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import restore_state
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
@@ -22,11 +23,23 @@ from pytest_homeassistant_custom_component.common import (
 )
 from rf_protocols import ModulationType, RadioFrequencyCommand
 
-from custom_components.harf_insoma.const import CONF_DURATION, DOMAIN
+from custom_components.harf_insoma.const import CONF_DURATION, CONF_TRANSMITTER, DOMAIN
 
 from .conftest import RecordingTransmitter, Valve
 
 pytestmark = pytest.mark.asyncio
+
+
+def restore_cache(hass: HomeAssistant, states: list[State]) -> None:
+    """Adapt the test plugin's restore cache to HA 2026.11's registry index."""
+    mock_restore_cache(hass, states)
+    data = restore_state.async_get(hass)
+    if hasattr(data, "last_states_by_entity_registry_id"):
+        registry = er.async_get(hass)
+        for entity_id, stored in data.last_states.items():
+            data.last_states_by_entity_registry_id[registry.async_get(entity_id).id] = (
+                stored
+            )
 
 
 async def turn(hass: HomeAssistant, valve: Valve, action: str) -> None:
@@ -263,8 +276,34 @@ async def test_local_setting_available_while_transmitter_is_unavailable(
     transmitter._attr_available = True
     transmitter.async_write_ha_state()
     await hass.async_block_till_done()
+    assert hass.states.get(valve.switch_id).state == STATE_UNKNOWN
     await turn(hass, valve, "turn_on")
     assert command_word(transmitter.commands[0]) == 0xB754
+
+
+async def test_transmitter_uuid_resolves_after_rename_before_setup(
+    hass: HomeAssistant, transmitter: RecordingTransmitter, make_entry, setup_valve
+):
+    """Resolve the saved registry UUID to the current ID when adding the switch."""
+    entry = make_entry()
+    registry = er.async_get(hass)
+    stored_uuid = registry.async_get(transmitter.entity_id).id
+    assert entry.data[CONF_TRANSMITTER] == stored_uuid
+    registry.async_update_entity(
+        transmitter.entity_id, new_entity_id="radio_frequency.before_setup"
+    )
+    await hass.async_block_till_done()
+    transmitter._attr_available = False
+    transmitter.async_write_ha_state()
+    valve = await setup_valve(entry=entry)
+    assert hass.states.get(valve.switch_id).state == STATE_UNAVAILABLE
+    transmitter._attr_available = True
+    transmitter.async_write_ha_state()
+    await hass.async_block_till_done()
+    assert hass.states.get(valve.switch_id).state == STATE_UNKNOWN
+    await turn(hass, valve, "turn_on")
+    assert command_word(transmitter.commands[0]) == 0xB75E
+    assert entry.data[CONF_TRANSMITTER] == stored_uuid
 
 
 async def test_transmitter_rename_keeps_uuid_binding(
@@ -273,16 +312,31 @@ async def test_transmitter_rename_keeps_uuid_binding(
     """Renaming the radio entity must not sever the valve's transmitter binding."""
     valve = await setup_valve()
     registry = er.async_get(hass)
-    registry.async_update_entity(
-        transmitter.entity_id, new_entity_id="radio_frequency.renamed"
-    )
-    await hass.async_block_till_done()
-    await turn(hass, valve, "turn_on")
-    assert command_word(transmitter.commands[0]) == 0xB75E
-    transmitter._attr_available = False
-    transmitter.async_write_ha_state()
-    await hass.async_block_till_done()
-    assert hass.states.get(valve.switch_id).state == STATE_UNAVAILABLE
+    stored_uuid = valve.entry.data[CONF_TRANSMITTER]
+    for new_id in ("radio_frequency.renamed", "radio_frequency.renamed_again"):
+        old_id = transmitter.entity_id
+        registry.async_update_entity(old_id, new_entity_id=new_id)
+        await hass.async_block_till_done()
+        assert hass.states.get(valve.switch_id).state != STATE_UNAVAILABLE
+        await turn(hass, valve, "turn_on")
+        assert command_word(transmitter.commands[-1]) == 0xB75E
+        active_deadline = deadline(hass, valve)
+        transmitter._attr_available = False
+        transmitter.async_write_ha_state()
+        await hass.async_block_till_done()
+        assert hass.states.get(valve.switch_id).state == STATE_UNAVAILABLE
+        transmitter._attr_available = True
+        transmitter.async_write_ha_state()
+        await hass.async_block_till_done()
+        assert hass.states.get(valve.switch_id).state == STATE_ON
+        assert deadline(hass, valve) == active_deadline
+        # A state at the old ID must no longer influence the valve.
+        hass.states.async_set(old_id, STATE_UNAVAILABLE)
+        await hass.async_block_till_done()
+        assert hass.states.get(valve.switch_id).state == STATE_ON
+        assert valve.entry.data[CONF_TRANSMITTER] == stored_uuid
+    await turn(hass, valve, "turn_off")
+    assert command_word(transmitter.commands[-1]) == 0xB750
 
 
 async def test_valve_rename_preserves_deadline_and_future_control(
@@ -325,7 +379,7 @@ async def test_restore_running_deadline_without_transmission(
         "switch", DOMAIN, "b750", suggested_object_id="test_valve", config_entry=entry
     )
     restored_deadline = dt_util.utcnow() + timedelta(minutes=17)
-    mock_restore_cache(
+    restore_cache(
         hass,
         [
             State(
@@ -371,7 +425,7 @@ async def test_restore_only_trusts_a_timed_on_state(
         "switch", DOMAIN, "b750", suggested_object_id="test_valve", config_entry=entry
     )
     attrs = {"auto_off_at": saved_deadline} if saved_deadline is not None else {}
-    mock_restore_cache(hass, [State(registered.entity_id, saved_state, attrs)])
+    restore_cache(hass, [State(registered.entity_id, saved_state, attrs)])
     valve = await setup_valve(entry=entry)
     assert hass.states.get(valve.switch_id).state == expected_state
     assert deadline(hass, valve) is None

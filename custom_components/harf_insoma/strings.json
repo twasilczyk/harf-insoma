@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Add an Insoma valve",
-        "description": "Select a 433.92 MHz RF transmitter and enter the OFF code of a remote already paired with your valve. ON will always use a timed watering command.",
+        "description": "Select a 433.926 MHz RF transmitter and enter the OFF code of a remote already paired with your valve. ON will always use a timed watering command.",
         "data": {
           "transmitter": "RF transmitter",
           "off_code": "Remote OFF code"
@@ -15,12 +15,12 @@
     },
     "error": {
       "invalid_off_code": "Enter a 16-bit OFF code whose last hexadecimal digit is 0, such as 0xB750. Do not enter a timed or permanent-ON code.",
-      "invalid_transmitter": "Select a compatible 433.92 MHz OOK transmitter."
+      "invalid_transmitter": "Select a compatible 433.926 MHz OOK transmitter."
     },
     "abort": {
       "already_configured": "This valve remote is already configured.",
       "no_transmitters": "Add an RF transmitter to Home Assistant before setting up Insoma RF.",
-      "no_compatible_transmitters": "No RF transmitter supports 433.92 MHz with OOK modulation."
+      "no_compatible_transmitters": "No RF transmitter supports 433.926 MHz with OOK modulation."
     }
   },
   "entity": {

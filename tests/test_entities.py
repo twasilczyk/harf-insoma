@@ -63,17 +63,17 @@ async def select_duration(hass: HomeAssistant, valve: Valve, minutes: str) -> No
 
 def command_word(command: RadioFrequencyCommand) -> int:
     """Decode the emitted waveform independently of the encoder implementation."""
-    assert command.frequency == 433_920_000
+    assert command.frequency == 433_926_000
     assert command.modulation is ModulationType.OOK
     assert command.repeat_count == 179
     timings = command.get_raw_timings()
     assert len(timings) == 34
-    assert timings[-2:] == [300, -2100]
+    assert timings[-2:] == [300, -2132]
     word = 0
     for offset in range(0, 32, 2):
         pair = timings[offset : offset + 2]
-        assert pair in ([300, -600], [600, -300])
-        word = (word << 1) | (pair == [600, -300])
+        assert pair in ([320, -592], [620, -292])
+        word = (word << 1) | (pair == [620, -292])
     return word
 
 

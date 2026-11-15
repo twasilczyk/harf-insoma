@@ -24,6 +24,7 @@ async def test_create_entry(
     hass: HomeAssistant, transmitter: RecordingTransmitter, off_code
 ):
     """Hex and decimal OFF codes identify the same valve and store a stable UUID."""
+    transmitter.frequency_ranges = [(433_926_000, 433_926_000)]
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
@@ -94,11 +95,14 @@ async def test_no_transmitters(hass: HomeAssistant):
     assert result["reason"] == "no_transmitters"
 
 
+@pytest.mark.parametrize(
+    "frequency_range", [(900_000_000, 930_000_000), (433_920_000, 433_920_000)]
+)
 async def test_no_compatible_transmitters(
-    hass: HomeAssistant, transmitter: RecordingTransmitter
+    hass: HomeAssistant, transmitter: RecordingTransmitter, frequency_range
 ):
-    """A transmitter for a different band cannot configure this 433.92 MHz valve."""
-    transmitter.frequency_ranges = [(900_000_000, 930_000_000)]
+    """Transmitters must support the adjusted carrier, not just the previous one."""
+    transmitter.frequency_ranges = [frequency_range]
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )

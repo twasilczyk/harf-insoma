@@ -7,7 +7,8 @@ from homeassistant.components.radio_frequency import (
     RadioFrequencyCommand,
 )
 
-FREQUENCY_HZ: Final = 433_920_000
+# SGW12-RX IQ capture: 433.92622 MHz, adjusted for a measured +230 Hz offset.
+FREQUENCY_HZ: Final = 433_926_000
 DURATION_MINUTES: Final = (5, 10, 30, 60, 90, 120)
 
 # Captured from two remotes. The low nibble 0xC means permanent ON and is
@@ -20,7 +21,7 @@ class _InsomaCommand(RadioFrequencyCommand):
     """An encoded 16-bit Insoma frame, repeated by the RF transmitter."""
 
     def __init__(self, code: int) -> None:
-        """Build an Insoma frame using a 300 µs pulse unit."""
+        """Build an estimated SGW12-RX waveform for validation with another IQ capture."""
         super().__init__(
             frequency=FREQUENCY_HZ,
             modulation=ModulationType.OOK,
@@ -28,10 +29,12 @@ class _InsomaCommand(RadioFrequencyCommand):
             repeat_count=_TOTAL_TRANSMISSIONS - 1,
         )
         timings: list[int] = []
+        # Compensate for measured RF HIGH pulses being about 14–16 µs longer
+        # than programmed. These are estimates, not guaranteed RF envelope timings.
         for bit in range(15, -1, -1):
-            timings.extend((600, -300) if code & (1 << bit) else (300, -600))
+            timings.extend((620, -292) if code & (1 << bit) else (320, -592))
         # This sync space also separates frames. No additional gap is needed.
-        timings.extend((300, -2100))
+        timings.extend((300, -2132))
         self._timings = tuple(timings)
 
     def get_raw_timings(self) -> list[int]:

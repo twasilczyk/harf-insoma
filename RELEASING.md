@@ -60,6 +60,10 @@ and valve:
    keeps its original deadline and the next on command uses the new duration.
 6. Verify the remaining duration choices and repeat with each valve or remote
    variant you intend to support.
+7. Capture the updated waveform with the USRP and compare its carrier, HIGH/LOW
+   durations, sync LOW, and frame period against the OEM SGW12-RX measurements
+   in the README. The configured frequency and compensated timings are estimates
+   that still require over-the-air validation.
 
 Record the tested valve model, transmitter/firmware version, Home Assistant
 version, and results in the release notes.

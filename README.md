@@ -6,7 +6,7 @@
 > USE AT YOUR OWN RISK
 
 Control an Insoma sprinkler or garden hose valve from Home Assistant through a
-433.92 MHz radio transmitter. Each valve has an **on/off switch** and one
+433.926 MHz radio transmitter. Each valve has an **on/off switch** and one
 **watering duration setting**.
 
 Turning on always sends a timed command: **5, 10, 30, 60, 90, or 120 minutes**,
@@ -19,7 +19,7 @@ permanent-on command. Turning off sends an explicit off command.
 ## Requirements
 
 - Home Assistant **2026.9.2 or newer**.
-- An RF transmitter supporting **433.92 MHz OOK**, exposed as a configured
+- An RF transmitter supporting **433.926 MHz OOK**, exposed as a configured
   `radio_frequency` entity.
 - An Insoma valve using the 16-bit protocol described below, and its remote's
   captured **OFF code**.
@@ -104,9 +104,25 @@ lower four bits select a command.
 
 The permanent-on command (`0xC`) is intentionally not available.
 
-Transmission uses a 300 µs pulse unit, a `1:2` high/low zero, a `2:1` high/low
-one, and a `1:7` sync pulse, repeated 180 times without an additional inter-frame
-gap.
+Transmission is configured at **433,926,000 Hz**. USRP recordings of the OEM
+SGW12-RX remote (OEM 2) measured **433.92622 MHz**; the previous transmission
+measured **433.92023 MHz** with a 433.920 MHz setting. The new setting accounts
+for that measured **+230 Hz** transmitter offset.
+
+| Parameter | OEM measured | Previous transmission measured | New programmed timing |
+| --- | --- | --- | --- |
+| `0` HIGH / LOW | 334 / 578 µs | 314 / 586 µs | 320 / 592 µs |
+| `1` HIGH / LOW | 638 / 274 µs | 616 / 284 µs | 620 / 292 µs |
+| Sync LOW | 2116 µs | 2086 µs | 2132 µs |
+| Frame period | 17024 µs | 16800 µs | 17024 µs |
+
+The programmed sync HIGH remains **300 µs**. The suggested timings compensate
+for RF envelope HIGH durations measuring approximately **14–16 µs longer** than
+programmed. They give a nominal **912 µs bit period** and **17024 µs frame
+period**, repeated **180 times** without an additional inter-frame gap
+(**3.06432 seconds** total). These are starting estimates to validate with
+another IQ capture, not exact hardware guarantees. The 16-bit encoding and
+command mapping are unchanged.
 
 ## Development and releases
 

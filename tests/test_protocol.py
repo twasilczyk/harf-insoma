@@ -13,12 +13,12 @@ def decode_frame(command: RadioFrequencyCommand) -> int:
     """Decode the independent pulse-width protocol from one complete frame."""
     timings = command.get_raw_timings()
     assert len(timings) == 34
-    assert timings[-2:] == [300, -2100]
+    assert timings[-2:] == [300, -2132]
     code = 0
     for mark, space in zip(timings[:32:2], timings[1:32:2], strict=True):
         assert mark > 0 and space < 0
-        assert mark - space == 900
-        assert (mark, space) in ((300, -600), (600, -300))
+        assert mark - space == 912
+        assert (mark, space) in ((320, -592), (620, -292))
         code = (code << 1) | (mark > -space)
     return code
 
@@ -48,25 +48,27 @@ def test_captured_remote_commands(
     """Every supported action matches the exact captured 16-bit word."""
     command = encode_command(off_code, duration)
     assert isinstance(command, RadioFrequencyCommand)
-    assert command.frequency == 433_920_000
+    assert command.frequency == 433_926_000
     assert command.modulation == ModulationType.OOK
     assert decode_frame(command) == captured_code
     assert decode_frame(command) & 0xF != 0xC
 
 
-def test_transmission_timing() -> None:
+@pytest.mark.parametrize("off_code", [0x0000, 0xB750, 0xFFF0])
+@pytest.mark.parametrize("duration", [None, 5, 10, 30, 60, 90, 120])
+def test_transmission_timing(off_code: int, duration: int | None) -> None:
     """Send 180 complete frames with only their built-in sync gaps."""
-    command = encode_command(0xB750, 120)
+    command = encode_command(off_code, duration)
     timings = command.get_raw_timings()
     assert command.repeat_count + 1 == 180
     assert len(timings) == 34
-    assert timings[-2:] == [300, -2100]
-    assert sum(abs(timing) for timing in timings) == 16_800
+    assert timings[-2:] == [300, -2132]
+    assert sum(abs(timing) for timing in timings) == 17_024
     assert (
-        sum(abs(timing) for timing in timings) * (command.repeat_count + 1) == 3_024_000
+        sum(abs(timing) for timing in timings) * (command.repeat_count + 1) == 3_064_320
     )
     # No extra inter-frame gap is inserted into the RF command.
-    assert timings[0] == 600
+    assert timings[0] == (620 if off_code & 0x8000 else 320)
     assert command.symbol_rate is None
     assert command.output_power is None
 

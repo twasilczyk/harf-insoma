@@ -83,6 +83,7 @@ async def test_esphome_lifecycle(
         assert (
             "key=8" in caplog.text
         )  # Log all RF channels, not just the first receiver.
+        await hass.async_block_till_done()
         handler = client.subscribe_infrared_rf_receive.call_args.args[0]
         for key in (1, 8, 9, 99):
             handler(InfraredRFReceiveEvent(key=key, timings=[320, -592]))
@@ -94,7 +95,22 @@ async def test_esphome_lifecycle(
         updated()
         assert seen[-1] == []
         data.available = True
+        client.list_entities_services.return_value = (
+            [
+                RadioFrequencyInfo(
+                    key=17, device_id=2, capabilities=RadioFrequencyCapability.RECEIVER
+                )
+            ],
+            [],
+        )
         updated()
+        await hass.async_block_till_done()
+        handler = client.subscribe_infrared_rf_receive.call_args.args[0]
+        handler(InfraredRFReceiveEvent(key=7, timings=[1]))
+        handler(InfraredRFReceiveEvent(key=17, device_id=0, timings=[2]))
+        assert seen[-1] == []
+        handler(InfraredRFReceiveEvent(key=17, device_id=2, timings=[320, -592]))
+        assert seen[-1] == [320, -592]
         assert client.subscribe_infrared_rf_receive.call_count == 2
         entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
         await hass.async_block_till_done()
@@ -158,3 +174,62 @@ async def test_hackrf_disconnect_and_unsubscribe(hass, receiver):
     assert [620, -292] not in seen
     stop()
     assert not hass.data[DATA_DISPATCHER].get(signal)
+
+
+@pytest.mark.parametrize("disconnect", [False, True])
+async def test_cancel_pending_receiver_discovery(hass, disconnect):
+    """A pending listing cannot install a subscription after disconnect or cleanup."""
+    import asyncio
+
+    entry = MockConfigEntry(domain="esphome", title="RF node")
+    entry.add_to_hass(hass)
+    pending = hass.loop.create_future()
+    client = MagicMock()
+
+    async def listing():
+        return await pending
+
+    client.list_entities_services = listing
+    entry.runtime_data = data = MagicMock(available=True, client=client)
+    entry.mock_state(hass, ConfigEntryState.LOADED)
+    stop = EsphomeSource(hass, entry).async_subscribe(lambda timings: None)
+    await asyncio.sleep(0)
+    if disconnect:
+        data.available = False
+        data.async_subscribe_device_updated.call_args.args[0]()
+    else:
+        stop()
+    await hass.async_block_till_done()
+    assert pending.cancelled()
+    client.subscribe_infrared_rf_receive.assert_not_called()
+    if disconnect:
+        stop()
+    entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
+
+
+async def test_receiver_listing_failure_retries_on_update(hass):
+    """Unverified channels stay blocked after API errors until discovery succeeds."""
+    entry = MockConfigEntry(domain="esphome", title="RF node")
+    entry.add_to_hass(hass)
+    client = MagicMock()
+    client.list_entities_services = AsyncMock(side_effect=TimeoutError)
+    entry.runtime_data = data = MagicMock(available=True, client=client)
+    entry.mock_state(hass, ConfigEntryState.LOADED)
+    seen = []
+    stop = EsphomeSource(hass, entry).async_subscribe(seen.append)
+    try:
+        await hass.async_block_till_done()
+        client.subscribe_infrared_rf_receive.assert_not_called()
+        client.list_entities_services.side_effect = None
+        client.list_entities_services.return_value = (
+            [RadioFrequencyInfo(key=7, capabilities=RadioFrequencyCapability.RECEIVER)],
+            [],
+        )
+        data.async_subscribe_device_updated.call_args.args[0]()
+        await hass.async_block_till_done()
+        receive = client.subscribe_infrared_rf_receive.call_args.args[0]
+        receive(InfraredRFReceiveEvent(key=7, timings=[320, -592]))
+        assert seen == [[320, -592]]
+    finally:
+        stop()
+        entry.mock_state(hass, ConfigEntryState.NOT_LOADED)

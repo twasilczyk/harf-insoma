@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        homeassistant: ["2026.9.2", "2026.10.4", "2026.11.0"]
+        homeassistant: ["2026.9.2", "2026.10.4", "2026.11.0", "2026.11.1"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

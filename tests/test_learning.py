@@ -160,3 +160,71 @@ async def test_subscription_failure_offers_retry(hass, transmitter, receiver):
     result = await hass.config_entries.flow.async_configure(result["flow_id"])
     assert result["step_id"] == "retry"
     hass.config_entries.flow.async_abort(result["flow_id"])
+
+
+@pytest.mark.parametrize("cached_receiver", [False, True])
+async def test_esphome_learning_ignores_filtered_ha_cache(
+    hass, transmitter, cached_receiver
+):
+    """HA 2026.11.1 caches only transmitters; newer HA also caches receivers."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from aioesphomeapi import (
+        InfraredInfo,
+        InfraredRFReceiveEvent,
+        RadioFrequencyCapability,
+        RadioFrequencyInfo,
+    )
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(domain="esphome", title="RF receiver")
+    entry.add_to_hass(hass)
+    infrared = InfraredInfo(key=1)
+    rx = RadioFrequencyInfo(
+        key=7,
+        capabilities=RadioFrequencyCapability.RECEIVER,
+        frequency_min=433_920_000,
+        frequency_max=433_920_000,
+    )
+    tx = RadioFrequencyInfo(key=8, capabilities=RadioFrequencyCapability.TRANSMITTER)
+    client = MagicMock()
+    client.list_entities_services = AsyncMock(return_value=([infrared, rx, tx], []))
+    cache = {(0, 8): tx}
+    if cached_receiver:
+        cache[(0, 7)] = rx
+    entry.runtime_data = MagicMock(
+        available=True,
+        client=client,
+        info={RadioFrequencyInfo: cache, InfraredInfo: {(0, 1): infrared}},
+    )
+    entry.mock_state(hass, ConfigEntryState.LOADED)
+    try:
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_TRANSMITTER: transmitter.entity_id}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_RECEIVER: f"esphome:{entry.entry_id}"}
+        )
+        assert result["type"] is FlowResultType.SHOW_PROGRESS
+        await hass.async_block_till_done()
+        receive = client.subscribe_infrared_rf_receive.call_args.args[0]
+        for key in (1, 8, 99):
+            receive(InfraredRFReceiveEvent(key=key, timings=remote_frame(0x24E2) * 3))
+        await hass.async_block_till_done()
+        assert (
+            hass.config_entries.flow.async_get(result["flow_id"])["step_id"] == "learn"
+        )
+        receive(InfraredRFReceiveEvent(key=7, timings=remote_frame(0xB752) * 3))
+        await hass.async_block_till_done(wait_background_tasks=True)
+        client.subscribe_infrared_rf_receive.return_value.assert_called_once()
+        result = await hass.config_entries.flow.async_configure(result["flow_id"])
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"][CONF_OFF_CODE] == 0xB750
+        await hass.async_block_till_done()
+        assert transmitter.commands == []
+        assert await hass.config_entries.async_unload(result["result"].entry_id)
+    finally:
+        entry.mock_state(hass, ConfigEntryState.NOT_LOADED)

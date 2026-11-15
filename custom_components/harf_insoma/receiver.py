@@ -93,13 +93,19 @@ class EsphomeSource(FrameSource):
     domain = "esphome"
 
     async def async_available(self) -> bool:
-        from aioesphomeapi import RadioFrequencyInfo
-
         if self.entry.state is not ConfigEntryState.LOADED:
             return False
         data: RuntimeEntryData = self.entry.runtime_data
         if not data.available:
             return False
+        return bool(await self._async_receiver_keys(data))
+
+    async def _async_receiver_keys(
+        self, data: "RuntimeEntryData"
+    ) -> set[tuple[int, int]]:
+        """Read unfiltered API metadata; HA may cache only RF transmitters."""
+        from aioesphomeapi import RadioFrequencyInfo
+
         async with asyncio.timeout(5):
             infos, _ = await data.client.list_entities_services()
         rf_infos = [info for info in infos if isinstance(info, RadioFrequencyInfo)]
@@ -115,38 +121,66 @@ class EsphomeSource(FrameSource):
                 info.frequency_max,
                 info.supported_modulations,
             )
-        return any(_compatible_receiver(info) for info in rf_infos)
+        return {
+            (info.device_id, info.key)
+            for info in rf_infos
+            if _compatible_receiver(info)
+        }
 
     @callback
     def async_subscribe(self, handler: FrameHandler) -> CALLBACK_TYPE:
-        from aioesphomeapi import InfraredRFReceiveEvent, RadioFrequencyInfo
+        from aioesphomeapi import InfraredRFReceiveEvent
 
         unsub_update: CALLBACK_TYPE | None = None
         unsub_receive: CALLBACK_TYPE | None = None
+        refresh_task: asyncio.Task[None] | None = None
+        receiver_keys: set[tuple[int, int]] = set()
 
         @callback
         def on_event(event: InfraredRFReceiveEvent) -> None:
             data: RuntimeEntryData = self.entry.runtime_data
-            info = data.info.get(RadioFrequencyInfo, {}).get(
-                (event.device_id, event.key)
-            )
-            if data.available and info is not None and _compatible_receiver(info):
+            if data.available and (event.device_id, event.key) in receiver_keys:
                 handler(list(event.timings))
+
+        async def refresh(data: "RuntimeEntryData") -> None:
+            nonlocal receiver_keys, unsub_receive
+            try:
+                receiver_keys = await self._async_receiver_keys(data)
+                unsub_receive = data.client.subscribe_infrared_rf_receive(on_event)
+            except Exception:
+                receiver_keys.clear()
+                _LOGGER.debug(
+                    "Could not subscribe to receiver %s", self.id, exc_info=True
+                )
+
+        @callback
+        def cancel_refresh() -> None:
+            nonlocal refresh_task
+            receiver_keys.clear()
+            if refresh_task is not None:
+                refresh_task.cancel()
+                refresh_task = None
 
         @callback
         def on_device_update() -> None:
-            nonlocal unsub_receive
+            nonlocal unsub_receive, refresh_task
             data: RuntimeEntryData = self.entry.runtime_data
             if not data.available:
                 # API subscriptions die with the connection.
                 unsub_receive = None
+                cancel_refresh()
                 handler([])
-            elif unsub_receive is None:
-                unsub_receive = data.client.subscribe_infrared_rf_receive(on_event)
+            elif unsub_receive is None and (
+                refresh_task is None or refresh_task.done()
+            ):
+                refresh_task = self.hass.async_create_task(
+                    refresh(data), "Insoma receiver channel discovery"
+                )
 
         @callback
         def detach() -> None:
             nonlocal unsub_update, unsub_receive
+            cancel_refresh()
             if unsub_update is not None:
                 unsub_update()
                 unsub_update = None
